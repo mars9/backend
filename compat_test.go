@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"reflect"
@@ -53,6 +54,47 @@ func testBasic(t *testing.T, backend ...DB) {
 	}
 }
 
+func testBasicTransaction(t *testing.T, backend ...DB) {
+	for _, db := range backend {
+		txn, err := db.Txn()
+		if err != nil {
+			t.Fatalf("%s: begin writable transaction: %v", db.Name(), err)
+		}
+		defer txn.Rollback()
+
+		key := []byte("key042")
+		val := []byte("val042")
+		v, err := txn.Get(key)
+		if err != nil {
+			t.Fatalf("%s: transaction get key %q: %v", db.Name(), key, err)
+		}
+		if bytes.Compare(val, v) != 0 {
+			t.Fatalf("%s: lookup execpted value %q, got %q", db.Name(), val, v)
+		}
+
+		val = []byte("abc")
+		if err = txn.Put(key, val); err != nil {
+			t.Fatalf("%s: put key %q: %v", db.Name(), key, err)
+		}
+
+		v, err = txn.Get(key)
+		if err != nil {
+			t.Fatalf("%s: transaction get key %q: %v", db.Name(), key, err)
+		}
+		if bytes.Compare(val, v) != 0 {
+			t.Fatalf("%s: lookup execpted value %q, got %q", db.Name(), val, v)
+		}
+
+		v, err = txn.Get(val)
+		if err != nil {
+			t.Fatalf("%s: transaction get key %q: %v", db.Name(), val, err)
+		}
+		if v != nil {
+			t.Fatalf("%s: transaction get: expected <nil> key", db.Name())
+		}
+	}
+}
+
 func TestCompatibility(t *testing.T) {
 	boltDB := openBoltDB(t, "compatibility_boltdb.db")
 	levelDB := openLevelDB(t, "compatibility_leveldb")
@@ -62,6 +104,7 @@ func TestCompatibility(t *testing.T) {
 	}()
 
 	testBasic(t, boltDB, levelDB)
+	testBasicTransaction(t, boltDB, levelDB)
 }
 
 func openBoltDB(t *testing.T, path string) *BoltDB {

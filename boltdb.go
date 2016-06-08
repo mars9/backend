@@ -103,7 +103,14 @@ func (db *BoltDB) WriteTo(w io.Writer) (n int64, err error) {
 
 func (db *BoltDB) Name() string { return "BoltDB" }
 
-func (db *BoltDB) Close() error { return db.tree.Close() }
+func (db *BoltDB) Close() error {
+	if db == nil || db.tree == nil {
+		return errors.New("closing unopened BoltDB instance")
+	}
+	err := db.tree.Close()
+	db.tree = nil
+	return err
+}
 
 type boltIterator struct {
 	c  *bolt.Cursor
