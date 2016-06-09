@@ -14,8 +14,6 @@ var _ DB = (*BoltDB)(nil)
 
 const defaultOpenMode = 0600
 
-// TODO: better error handling
-
 type BoltDB struct {
 	tree *bolt.DB
 }
@@ -75,10 +73,7 @@ func (db *BoltDB) Iterator() (Iterator, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &boltIterator{
-		c:  tx.Bucket(rootBucket).Cursor(),
-		tx: tx,
-	}, nil
+	return &boltIterator{c: tx.Bucket(rootBucket).Cursor(), tx: tx}, nil
 }
 
 func (db *BoltDB) Txn() (Txn, error) {
@@ -86,11 +81,7 @@ func (db *BoltDB) Txn() (Txn, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return &boltTxn{
-		b:  tx.Bucket(rootBucket),
-		tx: tx,
-	}, nil
+	return &boltTxn{b: tx.Bucket(rootBucket), tx: tx}, nil
 }
 
 func (db *BoltDB) WriteTo(w io.Writer) (n int64, err error) {

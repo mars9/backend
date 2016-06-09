@@ -2,10 +2,6 @@ package backend
 
 import "io"
 
-type StorageError string
-
-func (e StorageError) Error() string { return string(e) }
-
 type DB interface {
 	BatchGet(keys [][]byte, getter BatchGetter) error
 	Get(key []byte, getter Getter) (bool, error)

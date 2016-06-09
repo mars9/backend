@@ -43,19 +43,6 @@ var (
 	ctrue  = C.uchar(1)
 )
 
-/*
-func CreateIfMissing(create bool) LevelOption {
-	return func(db *LevelDB) error {
-		op := cfalse
-		if create {
-			op = ctrue
-		}
-		C.leveldb_options_set_create_if_missing(db.opts, op)
-		return nil
-	}
-}
-*/
-
 const maxSlice = 0x7fffffff
 
 func unsafeGoBytes(data *C.char, size C.size_t) []byte {
@@ -66,11 +53,15 @@ func unsafeGoBytes(data *C.char, size C.size_t) []byte {
 	return (*[maxSlice]byte)(unsafe.Pointer(data))[:dlen:dlen]
 }
 
-func newLevelDBError(errptr *C.char) error {
+type storageError string
+
+func (e storageError) Error() string { return string(e) }
+
+func checkDatabaseError(errptr *C.char) error {
 	if errptr == nil {
 		return nil
 	}
-	err := StorageError(C.GoString(errptr))
+	err := storageError(C.GoString(errptr))
 	C.leveldb_free(unsafe.Pointer(errptr))
 	return err
 }
@@ -102,7 +93,7 @@ func OpenLevelDB(root string, opts ...LevelOption) (*LevelDB, error) {
 
 	var errptr *C.char
 	db.tree = C.leveldb_open(db.opts, path, &errptr)
-	if err := newLevelDBError(errptr); err != nil {
+	if err := checkDatabaseError(errptr); err != nil {
 		return nil, err
 	}
 	return db, nil
@@ -127,36 +118,21 @@ func (db *LevelDB) WriteTo(w io.Writer) (int64, error) {
 	panic("LevelDB: WriteTo not implemented")
 }
 
-func (db *LevelDB) newSnapshot() (*C.leveldb_snapshot_t, *C.leveldb_readoptions_t) {
-	snap := C.leveldb_create_snapshot(db.tree) // create reader snapshot
-	ropts := C.leveldb_readoptions_create()
-	C.leveldb_readoptions_set_snapshot(ropts, snap)
-	return snap, ropts
-}
-
 func (db *LevelDB) BatchGet(keys [][]byte, getter BatchGetter) error {
-	snap, ropts := db.newSnapshot()
-	defer func() {
-		C.leveldb_readoptions_destroy(ropts)
-		C.leveldb_release_snapshot(db.tree, snap)
-	}()
+	iter := newLevelIterator(db, true)
+	defer iter.Close() // TODO: error handling
 
 	for _, key := range keys {
-		k := (*C.char)(unsafe.Pointer(&key[0]))
-		klen := C.size_t(len(key))
-		var errptr *C.char
-		var vlen C.size_t
-
-		v := C.leveldb_get(db.tree, ropts, k, klen, &vlen, &errptr)
-		if err := newLevelDBError(errptr); err != nil {
+		value, err := iter.get(key)
+		if err != nil {
 			return err
 		}
-		if v == nil {
-			return getter(key, nil)
-		}
 
-		err := getter(key, unsafeGoBytes(v, vlen))
-		C.leveldb_free(unsafe.Pointer(v))
+		if value != nil {
+			err = getter(key, value)
+		} else {
+			err = getter(key, nil)
+		}
 		if err != nil {
 			return err
 		}
@@ -165,57 +141,74 @@ func (db *LevelDB) BatchGet(keys [][]byte, getter BatchGetter) error {
 }
 
 func (db *LevelDB) Get(key []byte, getter Getter) (bool, error) {
-	snap, ropts := db.newSnapshot()
-	defer func() {
-		C.leveldb_readoptions_destroy(ropts)
-		C.leveldb_release_snapshot(db.tree, snap)
-	}()
+	iter := newLevelIterator(db, true)
+	defer iter.Close() // TODO: error handling
 
-	k := (*C.char)(unsafe.Pointer(&key[0]))
-	klen := C.size_t(len(key))
-	var errptr *C.char
-	var vlen C.size_t
-
-	v := C.leveldb_get(db.tree, ropts, k, klen, &vlen, &errptr)
-	if err := newLevelDBError(errptr); err != nil {
-		return v != nil, err
-	}
-	if v == nil {
-		return false, getter(nil)
+	value, err := iter.get(key)
+	if err != nil {
+		return value != nil, err
 	}
 
-	err := getter(unsafeGoBytes(v, vlen))
-	C.leveldb_free(unsafe.Pointer(v))
-	return true, err
+	var found bool
+	if value != nil {
+		found, err = true, getter(value)
+	} else {
+		found, err = false, getter(nil)
+	}
+	return found, err
 }
 
 func (db *LevelDB) Iterator() (Iterator, error) {
-	snap, ropts := db.newSnapshot()
-	return &levelIterator{
-		iter:  C.leveldb_create_iterator(db.tree, ropts),
-		ropts: ropts,
-		snap:  snap,
-		tree:  db.tree,
-	}, nil
+	return newLevelIterator(db, true), nil
 }
 
 func (db *LevelDB) Txn() (Txn, error) {
 	db.writer.Lock()
-	return &levelTxn{
-		wopts:    C.leveldb_writeoptions_create(),
-		ropts:    C.leveldb_readoptions_create(),
-		batch:    C.leveldb_writebatch_create(),
-		tree:     db.tree,
-		modified: make(map[string][]byte),
-		writer:   &db.writer,
-	}, nil
+	return newLevelTxn(db), nil
 }
 
 type levelIterator struct {
 	ropts *C.leveldb_readoptions_t
 	snap  *C.leveldb_snapshot_t
 	iter  *C.leveldb_iterator_t
-	tree  *C.leveldb_t
+	db    *LevelDB
+}
+
+func newLevelIterator(db *LevelDB, snapshot bool) *levelIterator {
+	ropts := C.leveldb_readoptions_create()
+	var snap *C.leveldb_snapshot_t
+	if snapshot {
+		snap := C.leveldb_create_snapshot(db.tree)
+		C.leveldb_readoptions_set_snapshot(ropts, snap)
+	}
+	iter := C.leveldb_create_iterator(db.tree, ropts)
+	return &levelIterator{
+		ropts: ropts,
+		snap:  snap,
+		iter:  iter,
+		db:    db,
+	}
+}
+
+func (i *levelIterator) Close() error {
+	if i == nil || i.db == nil {
+		return errors.New("closing unopened iterator")
+	}
+
+	var errptr *C.char
+	C.leveldb_iter_get_error(i.iter, &errptr)
+
+	C.leveldb_iter_destroy(i.iter)
+	C.leveldb_readoptions_destroy(i.ropts)
+	if i.snap != nil {
+		C.leveldb_release_snapshot(i.db.tree, i.snap)
+		i.snap = nil
+	}
+
+	i.iter = nil
+	i.ropts = nil
+	i.db = nil
+	return checkDatabaseError(errptr)
 }
 
 func (i levelIterator) isValid() bool {
@@ -224,6 +217,28 @@ func (i levelIterator) isValid() bool {
 		return false
 	}
 	return true
+}
+
+// get retrieves the key/value pair in the database. get is a simulates
+// the leveldb Get method to avoid additional key/value copy.
+func (i levelIterator) get(key []byte) ([]byte, error) {
+	k := (*C.char)(unsafe.Pointer(&key[0]))
+	klen := C.size_t(len(key))
+	C.leveldb_iter_seek(i.iter, k, klen)
+	if !i.isValid() {
+		var errptr *C.char
+		C.leveldb_iter_get_error(i.iter, &errptr)
+		return nil, checkDatabaseError(errptr)
+	}
+
+	k = C.leveldb_iter_key(i.iter, &klen)
+	if bytes.Compare(unsafeGoBytes(k, klen), key) != 0 {
+		return nil, nil
+	}
+
+	var vlen C.size_t
+	v := C.leveldb_iter_value(i.iter, &vlen)
+	return unsafeGoBytes(v, vlen), nil
 }
 
 // current returns the key/value pair in the database the levelIterator
@@ -283,50 +298,34 @@ func (i levelIterator) Prev() ([]byte, []byte) {
 	return i.current()
 }
 
-func (i *levelIterator) Close() error {
-	C.leveldb_iter_destroy(i.iter)
-	C.leveldb_readoptions_destroy(i.ropts)
-	C.leveldb_release_snapshot(i.tree, i.snap)
-	i.iter = nil
-	i.ropts = nil
-	i.snap = nil
-	return nil
-}
-
 type levelTxn struct {
 	wopts    *C.leveldb_writeoptions_t
-	ropts    *C.leveldb_readoptions_t
 	batch    *C.leveldb_writebatch_t
-	tree     *C.leveldb_t
 	modified map[string][]byte
-	writer   *sync.Mutex
+	iter     *levelIterator
+	db       *LevelDB
+}
+
+func newLevelTxn(db *LevelDB) *levelTxn {
+	txn := &levelTxn{
+		wopts:    C.leveldb_writeoptions_create(),
+		batch:    C.leveldb_writebatch_create(),
+		modified: make(map[string][]byte),
+		iter:     newLevelIterator(db, false),
+		db:       db,
+	}
+	return txn
 }
 
 // TODO: document internal iterator behaviour
 func (t levelTxn) Get(key []byte) ([]byte, error) {
 	v, found := t.modified[string(key)]
 	if !found {
-		iter := C.leveldb_create_iterator(t.tree, t.ropts)
-		defer C.leveldb_iter_destroy(iter)
+		return t.iter.get(key)
+	}
 
-		k := (*C.char)(unsafe.Pointer(&key[0]))
-		klen := C.size_t(len(key))
-		C.leveldb_iter_seek(iter, k, klen)
-
-		valid := C.leveldb_iter_valid(iter)
-		if valid == cfalse {
-			return nil, nil
-		}
-
-		k = C.leveldb_iter_key(iter, &klen)
-		if bytes.Compare(key, unsafeGoBytes(k, klen)) != 0 {
-			return nil, nil
-		}
-
-		var vlen C.size_t
-		v := C.leveldb_iter_value(iter, &vlen)
-
-		return unsafeGoBytes(v, vlen), nil
+	if v == nil { // deleted in transaction
+		return nil, nil
 	}
 	return v, nil
 }
@@ -343,29 +342,44 @@ func (t *levelTxn) Put(key, value []byte) error {
 }
 
 func (t levelTxn) Delete(key []byte) error {
+	k := (*C.char)(unsafe.Pointer(&key[0]))
+	klen := C.size_t(len(key))
+
+	C.leveldb_writebatch_delete(t.batch, k, klen)
+	t.modified[string(key)] = nil
 	return nil
 }
 
-func (t *levelTxn) close() {
+func (t *levelTxn) close() error {
 	C.leveldb_writebatch_destroy(t.batch)
 	C.leveldb_writeoptions_destroy(t.wopts)
-	C.leveldb_readoptions_destroy(t.ropts)
+	err := t.iter.Close()
 	t.wopts = nil
-	t.ropts = nil
 	t.batch = nil
 	t.modified = nil
+	if err != nil {
+		return storageError(err.Error())
+	}
+	return nil
 }
 
 func (t *levelTxn) Rollback() error {
-	t.writer.Unlock()
-	t.close()
-	return nil
+	if t == nil || t.batch == nil {
+		return errors.New("rollback unopened transaction")
+	}
+
+	t.db.writer.Unlock()
+	return t.close()
 }
 
 func (t *levelTxn) Commit() error {
+	if t == nil || t.batch == nil {
+		return errors.New("commit unopened transaction")
+	}
+
 	var errptr *C.char
-	C.leveldb_write(t.tree, t.wopts, t.batch, &errptr)
-	t.writer.Unlock()
-	t.close()
-	return newLevelDBError(errptr)
+	C.leveldb_write(t.db.tree, t.wopts, t.batch, &errptr)
+	t.db.writer.Unlock()
+	t.close() // TODO: error handling
+	return checkDatabaseError(errptr)
 }
