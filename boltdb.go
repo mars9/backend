@@ -14,10 +14,17 @@ var _ DB = (*BoltDB)(nil)
 
 const defaultOpenMode = 0600
 
+// BoltDB represents a key/value store.
 type BoltDB struct {
 	tree *bolt.DB
 }
 
+// OpenBoltDB creates and opens a database at the given path. If the file
+// does not exist then it will be created automatically.
+//
+// Timeout is the amount of time to wait to obtain a file lock. When set
+// to zero it will wait indefinitely. This option is only available on
+// Darwin and Linux.
 func OpenBoltDB(path string, timeout time.Duration) (*BoltDB, error) {
 	tree, err := bolt.Open(path, defaultOpenMode, &bolt.Options{
 		Timeout: timeout,
@@ -36,36 +43,16 @@ func OpenBoltDB(path string, timeout time.Duration) (*BoltDB, error) {
 	return &BoltDB{tree: tree}, nil
 }
 
-func (db *BoltDB) BatchGet(keys [][]byte, getter BatchGetter) error {
-	return db.tree.View(func(tx *bolt.Tx) (err error) {
-		b := tx.Bucket(rootBucket)
-		for _, key := range keys {
-			value := b.Get(key)
-			if value == nil {
-				err = getter(key, nil)
-			} else {
-				err = getter(key, value)
-			}
-			if err != nil {
-				break
-			}
-		}
-		return err
-	})
-}
-
-func (db *BoltDB) Get(key []byte, getter Getter) (bool, error) {
-	var found bool
+func (db *BoltDB) Get(key []byte, value []byte) ([]byte, error) {
 	err := db.tree.View(func(tx *bolt.Tx) error {
-		value := tx.Bucket(rootBucket).Get(key)
-		if value == nil {
-			found = false
-			return nil
+		val := tx.Bucket(rootBucket).Get(key)
+		if val == nil {
+			return ErrNotFound
 		}
-		found = true
-		return getter(value)
+		value = clone(value, val)
+		return nil
 	})
-	return found, err
+	return value, err
 }
 
 func (db *BoltDB) Iterator() (Iterator, error) {
@@ -175,7 +162,11 @@ func (t *boltTxn) Get(key []byte) ([]byte, error) {
 	if t == nil || t.tx == nil {
 		return nil, nil
 	}
-	return t.b.Get(key), nil
+	value := t.b.Get(key)
+	if value == nil {
+		return nil, ErrNotFound
+	}
+	return value, nil
 }
 
 func (t *boltTxn) Rollback() error {

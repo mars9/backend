@@ -8,6 +8,21 @@ import (
 	"testing"
 )
 
+var (
+	compatValues     = [][]byte{}
+	compatKeys       = [][]byte{}
+	compatPairLength = 100
+)
+
+func init() {
+	for i := 0; i < compatPairLength; i++ {
+		key := []byte(fmt.Sprintf("key%.3d", i))
+		val := []byte(fmt.Sprintf("val%.3d", i))
+		compatValues = append(compatValues, val)
+		compatKeys = append(compatKeys, key)
+	}
+}
+
 func testBasic(t *testing.T, backend ...DB) {
 	for _, db := range backend {
 		// create key/value pairs
@@ -15,10 +30,10 @@ func testBasic(t *testing.T, backend ...DB) {
 		if err != nil {
 			t.Fatalf("%s: begin writable transaction: %v", db.Name(), err)
 		}
-		for i := 0; i < 100; i++ {
-			key := []byte(fmt.Sprintf("key%.3d", i))
-			val := []byte(fmt.Sprintf("val%.3d", i))
-			if err = txn.Put(key, val); err != nil {
+
+		// insert key/value pairs
+		for i, key := range compatKeys {
+			if err = txn.Put(key, compatValues[i]); err != nil {
 				t.Fatalf("%s: put key %q: %v", db.Name(), key, err)
 			}
 		}
@@ -26,17 +41,27 @@ func testBasic(t *testing.T, backend ...DB) {
 			t.Fatalf("%s: commit writable transaction: %v", db.Name(), err)
 		}
 
-		// lookup key/value pair
-		want := [][]byte{[]byte("key042"), []byte("key079")}
+		// lookup key/value pairs
+		want := [][]byte{[]byte("val042"), []byte("val079")}
 		got := make([][]byte, 0, 2)
-		if err = db.BatchGet(want, func(key, val []byte) error {
-			got = append(got, append([]byte(nil), key...))
-			return nil
-		}); err != nil {
-			t.Fatalf("%s: batch get: %v", db.Name(), err)
+		for _, key := range [][]byte{[]byte("key042"), []byte("key079")} {
+			val, err := db.Get(key, nil)
+			if err != nil {
+				t.Fatalf("%s: get: %v", db.Name(), err)
+			}
+			got = append(got, val)
 		}
 		if !reflect.DeepEqual(want, got) {
-			t.Fatalf("%s: batch get: expected keys %q, got %q", db.Name(), want, got)
+			t.Fatalf("%s: get: expected keys %q, got %q", db.Name(), want, got)
+		}
+
+		// returns ErrNotFound
+		val, err := db.Get([]byte("xxx"), nil)
+		if err != ErrNotFound {
+			t.Fatalf("%s: get: expected ErrNotFound, got %v", db.Name(), err)
+		}
+		if val != nil {
+			t.Fatalf("%s: get: expected <nil> value, got %q", db.Name, val)
 		}
 
 		// iterate key/value store
@@ -44,6 +69,8 @@ func testBasic(t *testing.T, backend ...DB) {
 		if err != nil {
 			t.Fatalf("%s: next iterator: %v", db.Name(), err)
 		}
+		defer iter.Close()
+
 		i := 0
 		for k, _ := iter.First(); k != nil; k, _ = iter.Next() {
 			i++
@@ -86,11 +113,66 @@ func testBasicTransaction(t *testing.T, backend ...DB) {
 		}
 
 		v, err = txn.Get(val)
+		if err != ErrNotFound {
+			t.Fatalf("%s: transaction get: expected ErrNotFound, got %v", db.Name(), err)
+		}
+	}
+}
+
+func testBasicIterator(t *testing.T, backend ...DB) {
+	for _, db := range backend {
+		iter, err := db.Iterator()
 		if err != nil {
-			t.Fatalf("%s: transaction get key %q: %v", db.Name(), val, err)
+			t.Fatalf("%s: next iterator: %v", db.Name(), err)
+		}
+
+		i := 0
+		for k, v := iter.First(); k != nil; k, v = iter.Next() {
+			val := compatValues[i]
+			key := compatKeys[i]
+			if bytes.Compare(v, val) != 0 {
+				t.Fatalf("%s: ascending iterator: expected value %q, got %q", db.Name(), val, v)
+			}
+			if bytes.Compare(k, key) != 0 {
+				t.Fatalf("%s: ascending iterator: expected key %q, got %q", db.Name(), key, k)
+			}
+			i++
+		}
+
+		i = compatPairLength - 1
+		for k, v := iter.Last(); k != nil; k, v = iter.Prev() {
+			val := compatValues[i]
+			key := compatKeys[i]
+			if bytes.Compare(v, val) != 0 {
+				t.Fatalf("%s: descending iterator: expected value %q, got %q", db.Name(), val, v)
+			}
+			if bytes.Compare(k, key) != 0 {
+				t.Fatalf("%s: descending iterator: expected key %q, got %q", db.Name(), key, k)
+			}
+			i--
+		}
+
+		i = compatPairLength / 2
+		k, v := iter.Seek(compatKeys[i])
+		val := compatValues[i]
+		key := compatKeys[i]
+		if bytes.Compare(v, val) != 0 {
+			t.Fatalf("%s: seek: expected value %q, got %q", db.Name(), val, v)
+		}
+		if bytes.Compare(k, key) != 0 {
+			t.Fatalf("%s: seek: expected key %q, got %q", db.Name(), key, k)
+		}
+
+		k, v = iter.Seek([]byte("xxx"))
+		if v != nil {
+			t.Fatalf("%s: seek: expected <nil> value, got %q", db.Name(), v)
 		}
 		if v != nil {
-			t.Fatalf("%s: transaction get: expected <nil> key", db.Name())
+			t.Fatalf("%s: seek: expected <nil> key, got %q", db.Name(), k)
+		}
+
+		if err = iter.Close(); err != nil {
+			t.Fatalf("%s: closing iterator: %v", db.Name(), err)
 		}
 	}
 }
@@ -105,6 +187,7 @@ func TestCompatibility(t *testing.T) {
 
 	testBasic(t, boltDB, levelDB)
 	testBasicTransaction(t, boltDB, levelDB)
+	testBasicIterator(t, boltDB, levelDB)
 }
 
 func openBoltDB(t *testing.T, path string) *BoltDB {

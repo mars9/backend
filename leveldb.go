@@ -1,7 +1,8 @@
 package backend
 
 /*
-#cgo LDFLAGS: -lleveldb
+#cgo LDFLAGS: -L/usr/local/src/leveldb -lleveldb
+#cgo CFLAGS: -I/usr/local/src/leveldb/include
 #include <stdlib.h>
 #include "leveldb/c.h"
 */
@@ -53,15 +54,11 @@ func unsafeGoBytes(data *C.char, size C.size_t) []byte {
 	return (*[maxSlice]byte)(unsafe.Pointer(data))[:dlen:dlen]
 }
 
-type storageError string
-
-func (e storageError) Error() string { return string(e) }
-
 func checkDatabaseError(errptr *C.char) error {
 	if errptr == nil {
 		return nil
 	}
-	err := storageError(C.GoString(errptr))
+	err := Error(C.GoString(errptr))
 	C.leveldb_free(unsafe.Pointer(errptr))
 	return err
 }
@@ -118,44 +115,18 @@ func (db *LevelDB) WriteTo(w io.Writer) (int64, error) {
 	panic("LevelDB: WriteTo not implemented")
 }
 
-func (db *LevelDB) BatchGet(keys [][]byte, getter BatchGetter) error {
+func (db *LevelDB) Get(key []byte, value []byte) ([]byte, error) {
 	iter := newLevelIterator(db, true)
 	defer iter.Close() // TODO: error handling
 
-	for _, key := range keys {
-		value, err := iter.get(key)
-		if err != nil {
-			return err
-		}
-
-		if value != nil {
-			err = getter(key, value)
-		} else {
-			err = getter(key, nil)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (db *LevelDB) Get(key []byte, getter Getter) (bool, error) {
-	iter := newLevelIterator(db, true)
-	defer iter.Close() // TODO: error handling
-
-	value, err := iter.get(key)
+	val, err := iter.get(key)
 	if err != nil {
-		return value != nil, err
+		return value, err
 	}
-
-	var found bool
-	if value != nil {
-		found, err = true, getter(value)
-	} else {
-		found, err = false, getter(nil)
+	if val == nil {
+		return value, ErrNotFound
 	}
-	return found, err
+	return clone(value, val), nil
 }
 
 func (db *LevelDB) Iterator() (Iterator, error) {
@@ -219,8 +190,8 @@ func (i levelIterator) isValid() bool {
 	return true
 }
 
-// get retrieves the key/value pair in the database. get is a simulates
-// the leveldb Get method to avoid additional key/value copy.
+// get retrieves the key/value pair in the database. get simulates the
+// leveldb Get method to avoid additional key/value copy.
 func (i levelIterator) get(key []byte) ([]byte, error) {
 	k := (*C.char)(unsafe.Pointer(&key[0]))
 	klen := C.size_t(len(key))
@@ -233,7 +204,7 @@ func (i levelIterator) get(key []byte) ([]byte, error) {
 
 	k = C.leveldb_iter_key(i.iter, &klen)
 	if bytes.Compare(unsafeGoBytes(k, klen), key) != 0 {
-		return nil, nil
+		return nil, ErrNotFound
 	}
 
 	var vlen C.size_t
@@ -325,7 +296,7 @@ func (t levelTxn) Get(key []byte) ([]byte, error) {
 	}
 
 	if v == nil { // deleted in transaction
-		return nil, nil
+		return nil, ErrNotFound
 	}
 	return v, nil
 }
@@ -358,7 +329,7 @@ func (t *levelTxn) close() error {
 	t.batch = nil
 	t.modified = nil
 	if err != nil {
-		return storageError(err.Error())
+		return Error(err.Error())
 	}
 	return nil
 }
