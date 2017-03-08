@@ -26,7 +26,7 @@ func init() {
 func testBasic(t *testing.T, backend ...DB) {
 	for _, db := range backend {
 		// create key/value pairs
-		txn, err := db.Txn()
+		txn, err := db.Writable()
 		if err != nil {
 			t.Fatalf("%s: begin writable transaction: %v", db.Name(), err)
 		}
@@ -41,11 +41,15 @@ func testBasic(t *testing.T, backend ...DB) {
 			t.Fatalf("%s: commit writable transaction: %v", db.Name(), err)
 		}
 
+		rtxn, err := db.Readonly()
+		if err != nil {
+			t.Fatalf("%s: begin readonly transaction: %v", db.Name(), err)
+		}
 		// lookup key/value pairs
 		want := [][]byte{[]byte("val042"), []byte("val079")}
 		got := make([][]byte, 0, 2)
 		for _, key := range [][]byte{[]byte("key042"), []byte("key079")} {
-			val, err := db.Get(key, nil)
+			val, err := rtxn.Get(key)
 			if err != nil {
 				t.Fatalf("%s: get: %v", db.Name(), err)
 			}
@@ -56,12 +60,15 @@ func testBasic(t *testing.T, backend ...DB) {
 		}
 
 		// returns ErrNotFound
-		val, err := db.Get([]byte("xxx"), nil)
+		val, err := rtxn.Get([]byte("xxx"))
 		if err != ErrNotFound {
 			t.Fatalf("%s: get: expected ErrNotFound, got %v", db.Name(), err)
 		}
 		if val != nil {
 			t.Fatalf("%s: get: expected <nil> value, got %q", db.Name, val)
+		}
+		if err = rtxn.Rollback(); err != nil {
+			t.Fatalf("%s: rollback readonly transaction: %v", db.Name(), err)
 		}
 
 		// iterate key/value store
@@ -83,7 +90,7 @@ func testBasic(t *testing.T, backend ...DB) {
 
 func testBasicTransaction(t *testing.T, backend ...DB) {
 	for _, db := range backend {
-		txn, err := db.Txn()
+		txn, err := db.Writable()
 		if err != nil {
 			t.Fatalf("%s: begin writable transaction: %v", db.Name(), err)
 		}
@@ -179,15 +186,18 @@ func testBasicIterator(t *testing.T, backend ...DB) {
 
 func TestCompatibility(t *testing.T) {
 	boltDB := openBoltDB(t, "compatibility_boltdb.db")
-	levelDB := openLevelDB(t, "compatibility_leveldb")
+	//levelDB := openLevelDB(t, "compatibility_leveldb")
 	defer func() {
 		closeBoltDB(t, "compatibility_boltdb.db", boltDB)
-		closeLevelDB(t, "compatibility_leveldb", levelDB)
+		//	closeLevelDB(t, "compatibility_leveldb", levelDB)
 	}()
 
-	testBasic(t, boltDB, levelDB)
-	testBasicTransaction(t, boltDB, levelDB)
-	testBasicIterator(t, boltDB, levelDB)
+	testBasic(t, boltDB)
+	testBasicTransaction(t, boltDB)
+	testBasicIterator(t, boltDB)
+	//	testBasic(t, boltDB, levelDB)
+	//	testBasicTransaction(t, boltDB, levelDB)
+	//	testBasicIterator(t, boltDB, levelDB)
 }
 
 func openBoltDB(t *testing.T, path string) *BoltDB {
@@ -205,6 +215,7 @@ func closeBoltDB(t *testing.T, path string, db *BoltDB) {
 	os.RemoveAll(path)
 }
 
+/*
 func openLevelDB(t *testing.T, path string) *LevelDB {
 	db, err := OpenLevelDB(path)
 	if err != nil {
@@ -219,3 +230,4 @@ func closeLevelDB(t *testing.T, path string, db *LevelDB) {
 	}
 	os.RemoveAll(path)
 }
+*/

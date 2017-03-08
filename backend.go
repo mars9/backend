@@ -46,7 +46,7 @@ type Iterator interface {
 	Close() error
 }
 
-// Txn represents a read/write transaction on the database.
+// Txn represents a read-only transaction on the database.
 type Txn interface {
 	// Get gets the value for the given key. It returns ErrNotFound if the
 	// database does not contain the key.
@@ -54,6 +54,14 @@ type Txn interface {
 	// The caller should not modify the contents of the returned slice, but
 	// it is safe to modify the contents of the argument after Get returns.
 	Get(key []byte) ([]byte, error)
+
+	// Rollback closes the transaction and ignores all previous updates.
+	Rollback() error
+}
+
+// RWTxn represents a read/write transaction on the database.
+type RWTxn interface {
+	Txn
 
 	// Put sets the value for the given key. If the key exist then its
 	// previous value will be overwritten. Supplied value must remain valid
@@ -66,9 +74,6 @@ type Txn interface {
 	// It is safe to modify the contents of the arguments after Delete
 	// returns.
 	Delete(key []byte) error
-
-	// Rollback closes the transaction and ignores all previous updates.
-	Rollback() error
 
 	// Commit write all changes.
 	Commit() error
@@ -85,10 +90,12 @@ type DB interface {
 	//
 	//
 	// It is safe to modify the contents of the argument after Get returns.
-	Get(key []byte, value []byte) ([]byte, error)
+	//Get(key []byte, value []byte) ([]byte, error)
 
 	// Iterator creates a iterator associated with the database.
 	Iterator() (Iterator, error)
+
+	Readonly() (Txn, error)
 
 	// Txn starts a new transaction. Only one write transaction can be used
 	// at a time. Starting multiple write transactions will cause the calls
@@ -96,7 +103,7 @@ type DB interface {
 	// finishes.
 	//
 	// Transactions should not be dependent on one another.
-	Txn() (Txn, error)
+	Writable() (RWTxn, error)
 
 	// WriteTo writes the entire database to a writer.
 	WriteTo(w io.Writer) (int64, error)

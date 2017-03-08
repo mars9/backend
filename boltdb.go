@@ -43,6 +43,7 @@ func OpenBoltDB(path string, timeout time.Duration) (*BoltDB, error) {
 	return &BoltDB{tree: tree}, nil
 }
 
+/*
 func (db *BoltDB) Get(key []byte, value []byte) ([]byte, error) {
 	err := db.tree.View(func(tx *bolt.Tx) error {
 		val := tx.Bucket(rootBucket).Get(key)
@@ -54,6 +55,7 @@ func (db *BoltDB) Get(key []byte, value []byte) ([]byte, error) {
 	})
 	return value, err
 }
+*/
 
 func (db *BoltDB) Iterator() (Iterator, error) {
 	tx, err := db.tree.Begin(false)
@@ -63,7 +65,15 @@ func (db *BoltDB) Iterator() (Iterator, error) {
 	return &boltIterator{c: tx.Bucket(rootBucket).Cursor(), tx: tx}, nil
 }
 
-func (db *BoltDB) Txn() (Txn, error) {
+func (db *BoltDB) Readonly() (Txn, error) {
+	tx, err := db.tree.Begin(false)
+	if err != nil {
+		return nil, err
+	}
+	return &boltTxn{b: tx.Bucket(rootBucket), tx: tx}, nil
+}
+
+func (db *BoltDB) Writable() (RWTxn, error) {
 	tx, err := db.tree.Begin(true)
 	if err != nil {
 		return nil, err
