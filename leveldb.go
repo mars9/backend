@@ -1,8 +1,7 @@
 package backend
 
 /*
-#cgo LDFLAGS: -L/usr/local/src/leveldb -lleveldb
-#cgo CFLAGS: -I/usr/local/src/leveldb/include
+#cgo LDFLAGS:-lleveldb
 #include <stdlib.h>
 #include "leveldb/c.h"
 */
