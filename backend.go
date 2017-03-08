@@ -81,25 +81,16 @@ type RWTxn interface {
 
 // DB represents a key/value store.
 type DB interface {
-	// Get gets the value for the given key. It returns ErrNotFound if the
-	// database does not contain the key.
-	//
-	// The returned slice may be a sub-slice of value if value was large
-	// enough to hold the entire block. Otherwise, a newly allocated slice
-	// will be returned.
-	//
-	//
-	// It is safe to modify the contents of the argument after Get returns.
-	//Get(key []byte, value []byte) ([]byte, error)
-
 	// Iterator creates a iterator associated with the database.
 	Iterator() (Iterator, error)
 
+	// Readonly starts a new read-only transaction.  Starting multiple
+	// read-only transaction will not block.
 	Readonly() (Txn, error)
 
-	// Txn starts a new transaction. Only one write transaction can be used
-	// at a time. Starting multiple write transactions will cause the calls
-	// to block and be serialized until the current write transaction
+	// Writable starts a new transaction. Only one write transaction can be
+	// used at a time. Starting multiple write transactions will cause the
+	// calls to block and be serialized until the current write transaction
 	// finishes.
 	//
 	// Transactions should not be dependent on one another.
@@ -128,13 +119,3 @@ func (e Error) Error() string { return string(e) }
 // ErrNotFound means that a get or delete call did not find the requested
 // key.
 const ErrNotFound Error = Error("key not found")
-
-func clone(dst, src []byte) []byte {
-	n := len(src)
-	if cap(dst) < n {
-		dst = make([]byte, n)
-	}
-	dst = dst[:n]
-	copy(dst, src)
-	return dst
-}
