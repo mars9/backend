@@ -43,20 +43,6 @@ func OpenBoltDB(path string, timeout time.Duration) (*BoltDB, error) {
 	return &BoltDB{tree: tree}, nil
 }
 
-/*
-func (db *BoltDB) Get(key []byte, value []byte) ([]byte, error) {
-	err := db.tree.View(func(tx *bolt.Tx) error {
-		val := tx.Bucket(rootBucket).Get(key)
-		if val == nil {
-			return ErrNotFound
-		}
-		value = clone(value, val)
-		return nil
-	})
-	return value, err
-}
-*/
-
 func (db *BoltDB) Iterator() (Iterator, error) {
 	tx, err := db.tree.Begin(false)
 	if err != nil {

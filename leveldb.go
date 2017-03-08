@@ -115,22 +115,6 @@ func (db *LevelDB) WriteTo(w io.Writer) (int64, error) {
 	panic("LevelDB: WriteTo not implemented")
 }
 
-/*
-func (db *LevelDB) Get(key []byte, value []byte) ([]byte, error) {
-	iter := newLevelIterator(db, true)
-	defer iter.Close() // TODO: error handling
-
-	val, err := iter.get(key)
-	if err != nil {
-		return value, err
-	}
-	if val == nil {
-		return value, ErrNotFound
-	}
-	return clone(value, val), nil
-}
-*/
-
 func (db *LevelDB) Iterator() (Iterator, error) {
 	return newLevelIterator(db, true), nil
 }
