@@ -186,18 +186,15 @@ func testBasicIterator(t *testing.T, backend ...DB) {
 
 func TestCompatibility(t *testing.T) {
 	boltDB := openBoltDB(t, "compatibility_boltdb.db")
-	//levelDB := openLevelDB(t, "compatibility_leveldb")
+	levelDB := openLevelDB(t, "compatibility_leveldb")
 	defer func() {
 		closeBoltDB(t, "compatibility_boltdb.db", boltDB)
-		//	closeLevelDB(t, "compatibility_leveldb", levelDB)
+		closeLevelDB(t, "compatibility_leveldb", levelDB)
 	}()
 
-	testBasic(t, boltDB)
-	testBasicTransaction(t, boltDB)
-	testBasicIterator(t, boltDB)
-	//	testBasic(t, boltDB, levelDB)
-	//	testBasicTransaction(t, boltDB, levelDB)
-	//	testBasicIterator(t, boltDB, levelDB)
+	testBasic(t, boltDB, levelDB)
+	testBasicTransaction(t, boltDB, levelDB)
+	testBasicIterator(t, boltDB, levelDB)
 }
 
 func openBoltDB(t *testing.T, path string) *BoltDB {
@@ -215,7 +212,6 @@ func closeBoltDB(t *testing.T, path string, db *BoltDB) {
 	os.RemoveAll(path)
 }
 
-/*
 func openLevelDB(t *testing.T, path string) *LevelDB {
 	db, err := OpenLevelDB(path)
 	if err != nil {
@@ -230,4 +226,3 @@ func closeLevelDB(t *testing.T, path string, db *LevelDB) {
 	}
 	os.RemoveAll(path)
 }
-*/
