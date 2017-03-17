@@ -119,13 +119,12 @@ func (db *LevelDB) Iterator() (Iterator, error) {
 }
 
 func (db *LevelDB) Readonly() (Txn, error) {
-	db.writer.Lock()
-	return newLevelTxn(db), nil
+	return newLevelTxn(db, false), nil
 }
 
 func (db *LevelDB) Writable() (RWTxn, error) {
 	db.writer.Lock()
-	return newLevelTxn(db), nil
+	return newLevelTxn(db, true), nil
 }
 
 type levelIterator struct {
@@ -268,15 +267,20 @@ type levelTxn struct {
 	modified map[string][]byte
 	iter     *levelIterator
 	db       *LevelDB
+	writable bool
 }
 
-func newLevelTxn(db *LevelDB) *levelTxn {
+func newLevelTxn(db *LevelDB, writable bool) *levelTxn {
 	txn := &levelTxn{
 		wopts:    C.leveldb_writeoptions_create(),
 		batch:    C.leveldb_writebatch_create(),
 		modified: make(map[string][]byte),
-		iter:     newLevelIterator(db, false),
 		db:       db,
+	}
+	if writable {
+		txn.iter = newLevelIterator(db, false)
+	} else {
+		txn.iter = newLevelIterator(db, true)
 	}
 	return txn
 }
@@ -332,7 +336,9 @@ func (t *levelTxn) Rollback() error {
 		return errors.New("rollback unopened transaction")
 	}
 
-	t.db.writer.Unlock()
+	if t.writable {
+		t.db.writer.Unlock()
+	}
 	return t.close()
 }
 
